@@ -37,16 +37,15 @@ CacheProducer::produce(const Name& dataName, const Policy& accessPolicy,
                        size_t maxSegmentSize)
 {
   if (m_cpKeyCache.count(accessPolicy) == 0) {
-    auto k = ckDataGen(accessPolicy, info, ckTemplate);
+    auto k = ckDataGen(accessPolicy, info, ckTemplate, maxSegmentSize);
     if (k.first == nullptr || k.second.size() == 0) {
       return std::make_tuple(SPtrVector<Data>(), SPtrVector<Data>());
     }
     m_cpKeyCache.emplace(accessPolicy, k);
   }
-
   auto& key = m_cpKeyCache.at(accessPolicy);
   Name ckObjName = key.second.at(0)->getName().getPrefix(-1);
-  auto data = Producer::produce(key.first, ckObjName, dataName, content, info, dataTemplate);
+  auto data = Producer::produce(key.first, ckObjName, dataName, content, info, dataTemplate, maxSegmentSize);
   return std::make_tuple(data, key.second);
 }
 
@@ -60,7 +59,7 @@ CacheProducer::produce(const Name& dataName, const std::vector<std::string>& att
   for (auto& i : attributes) ss << i << "|";
   auto attStr = ss.str();
   if (m_kpKeyCache.count(attStr) == 0) {
-    auto k = ckDataGen(attributes, info, ckTemplate);
+    auto k = ckDataGen(attributes, info, ckTemplate, maxSegmentSize);
     if (k.first == nullptr || k.second.size() == 0) {
       return std::make_tuple(SPtrVector<Data>(), SPtrVector<Data>());
     }
@@ -68,7 +67,7 @@ CacheProducer::produce(const Name& dataName, const std::vector<std::string>& att
   }
   auto& key = m_kpKeyCache.at(attStr);
   Name ckObjName = key.second.at(0)->getName().getPrefix(-1);
-  auto data = Producer::produce(key.first, ckObjName, dataName, content, info, dataTemplate);
+  auto data = Producer::produce(key.first, ckObjName, dataName, content, info, dataTemplate, maxSegmentSize);
   return std::make_tuple(data, key.second);
 }
 

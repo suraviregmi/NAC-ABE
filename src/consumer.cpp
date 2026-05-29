@@ -27,12 +27,15 @@
 #include <ndn-cxx/util/segment-fetcher.hpp>
 
 #include <cmath>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace ndn {
 namespace nacabe {
 
 NDN_LOG_INIT(nacabe.Consumer);
-
+// We use SegmentFetcher directly for both data and CK, and we de-dup CK fetches
+// so that only one network fetch happens per CK at a time.
 Consumer::Consumer(Face& face, KeyChain& keyChain,
                    security::Validator& validator,
                    const security::Certificate& identityCert,
@@ -119,45 +122,24 @@ Consumer::consume(const Interest& dataInterest,
     return;
   }
 
-  std::string nackMessage = "Nack for " + dataInterest.getName().toUri() + " data fetch with reason ";
-  std::string timeoutMessage = "Timeout for " + dataInterest.getName().toUri() + " data fetch";
+  NDN_LOG_INFO(m_cert.getIdentity() << " Fetch data via SegmentFetcher " << dataInterest.getName());
 
-  auto dataCallback = [=] (const Interest&, const Data& data) {
-    Name dataName = data.getName();
-    // if segmentation
-    if (dataName.get(-1).isSegment()) {
-      auto fetcher = SegmentFetcher::start(m_face, dataInterest, m_validator);
-      fetcher->afterSegmentValidated.connect([](Data seg) {
-        NDN_LOG_DEBUG("Validated " << seg.getName());
-      });
-      fetcher->onComplete.connect([=] (ConstBufferPtr contentBuffer) {
-        NDN_LOG_DEBUG("SegmentFetcher completed with total fetched size of " << contentBuffer->size());
-        decryptContent(dataName.getPrefix(-1), Block(contentBuffer), consumptionCb, errorCallback);
-      });
-      fetcher->onError.connect([] (uint32_t errorCode, const std::string& errorMsg) {
-        NDN_LOG_ERROR("Error occurs in segment fetching: " << errorMsg);
-      });
-    }
-    // if no segmentation
-    else {
-      m_validator.validate(data,
-        [=] (const Data& data) {
-          NDN_LOG_INFO("Encrypted data conforms to trust schema");
-          decryptContent(data.getName(), data.getContent(), consumptionCb, errorCallback);
-        },
-        [] (auto&&, const ndn::security::ValidationError& error) {
-          NDN_THROW(std::runtime_error("Encrypted data cannot be authenticated: " + error.getInfo()));
-        }
-      );      
-    }
-  };
+  ndn::SegmentFetcher::Options fetchOptions;
+  fetchOptions.probeLatestVersion = false; // Disable MustBeFresh flag
+  auto fetcher = SegmentFetcher::start(m_face, dataInterest, m_validator, fetchOptions);
+  fetcher->afterSegmentValidated.connect([](Data seg) {
+    NDN_LOG_DEBUG("Validated " << seg.getName());
+  });
+  fetcher->onComplete.connect([=](ConstBufferPtr contentBuffer) {
+    Name baseName = dataInterest.getName();
 
-  NDN_LOG_INFO(m_cert.getIdentity() << " Ask for data " << dataInterest.getName() );
-  m_face.expressInterest(dataInterest,
-                         dataCallback,
-                         std::bind(&Consumer::handleNack, this, _1, _2, errorCallback, nackMessage),
-                         std::bind(&Consumer::handleTimeout, this, _1, m_maxRetries,
-                                   dataCallback, errorCallback, nackMessage, timeoutMessage));
+    NDN_LOG_DEBUG("SegmentFetcher completed with total fetched size of " << contentBuffer->size() << " baseName=" << baseName);
+    decryptContent(baseName, Block(contentBuffer), consumptionCb, errorCallback);
+  });
+  fetcher->onError.connect([=](uint32_t errorCode, const std::string& errorMsg) {
+    NDN_LOG_ERROR("Data fetch error: " << errorMsg);
+    errorCallback("Data fetch failed: " + errorMsg);
+  });
 }
 
 void 
@@ -166,7 +148,6 @@ Consumer::consume(const Name &dataName,
                   const ConsumptionCallback &consumptionCb,
                   const ErrorCallback &errorCallback)
 {
-  // ready for decryption
   if (!readyForDecryption()) {
     errorCallback("Public params or private decryption key doesn't exist");
     return;
@@ -192,62 +173,96 @@ Consumer::decryptContent(const Name& dataObjName,
                          const ConsumptionCallback& successCallBack,
                          const ErrorCallback& errorCallback)
 {
-  // get encrypted content
   NDN_LOG_INFO(m_cert.getIdentity() << " Get content data " << dataObjName);
   content.parse();
   auto encryptedContentTLV = content.get(TLV_EncryptedContent);
-
+  
   NDN_LOG_INFO("Encrypted Content size is " << encryptedContentTLV.value_size());
   auto cipherText = std::make_shared<algo::CipherText>();
   cipherText->m_content = Buffer(encryptedContentTLV.value(), encryptedContentTLV.value_size());
   cipherText->m_plainTextSize = readNonNegativeInteger(content.get(TLV_PlainTextSize));
 
-  Name ckName(content.get(tlv::Name));
-  NDN_LOG_INFO("CK Name is " << ckName);
-  Interest ckInterest(ckName);
+  Name ckKey(content.get(tlv::Name));
+  NDN_LOG_INFO("CK Name is " << ckKey);
+
+  // 1) Cache fast-path
+  auto cacheIt = m_ckEncAesCache.find(ckKey);
+  if (cacheIt != m_ckEncAesCache.end()) {
+    NDN_LOG_DEBUG("CK encAES cache hit for " << ckKey);
+    cipherText->m_contentKey = std::make_shared<algo::ContentKey>();
+    cipherText->m_contentKey->m_encAesKey = cacheIt->second;
+    try {
+      Buffer result;
+      if (m_paramFetcher.getAbeType() == ABE_TYPE_CP_ABE)
+        result = algo::ABESupport::getInstance().cpDecrypt(m_paramFetcher.getPublicParams(), m_keyCache, *cipherText);
+      else if (m_paramFetcher.getAbeType() == ABE_TYPE_KP_ABE)
+        result = algo::ABESupport::getInstance().kpDecrypt(m_paramFetcher.getPublicParams(), m_keyCache, *cipherText);
+      else { errorCallback("Unsupported ABE type"); return; }
+      successCallBack(result);
+    }
+    catch (const std::exception& e) {
+      errorCallback(e.what());
+    }
+    return;
+  }
+
+  // 2) In-flight de-dup: only one CK fetch per ckKey
+  if (m_ckInterestsSent.count(ckKey) != 0) {
+    NDN_LOG_DEBUG("CK already in-flight for " << ckKey << ", queuing");
+    m_pendingCallbacks[ckKey].push_back(PendingTask{cipherText, successCallBack, errorCallback});
+    return;
+  }
+
+  // 3) Start single CK fetch and queue current task
+  m_ckInterestsSent.insert(ckKey);
+  m_pendingCallbacks[ckKey].push_back(PendingTask{cipherText, successCallBack, errorCallback});
+
+  Interest ckInterest(ckKey);
   ckInterest.setInterestLifetime(ndn::time::milliseconds(m_defaultTimeout));
   ckInterest.setCanBePrefix(true);
 
-  std::string nackMessage = "Nack for " + ckName.toUri() + " content key fetch with reason ";
-  std::string timeoutMessage = "Timeout for " + ckName.toUri() + " content key fetch";
+  NDN_LOG_INFO(m_cert.getIdentity() << " Fetch CK via SegmentFetcher " << ckInterest.getName());
 
-  auto dataCallback = [=] (const Interest&, const Data& data) {
-    Name dataName = data.getName();
-    // if segmentation
-    if (dataName.get(-1).isSegment()) {
-      auto fetcher = SegmentFetcher::start(m_face, ckInterest, m_validator);
-      fetcher->afterSegmentValidated.connect([](Data seg) {
-        NDN_LOG_DEBUG("Validated " << seg.getName());
-      });
-      fetcher->onComplete.connect([=] (ConstBufferPtr contentBuffer) {
-        NDN_LOG_DEBUG("SegmentFetcher completed with total fetched size of " << contentBuffer->size());
-        onCkeyData(dataName.getPrefix(-1), Block(contentBuffer), cipherText, successCallBack, errorCallback);
-      });
-      fetcher->onError.connect([] (uint32_t errorCode, const std::string& errorMsg) {
-        NDN_LOG_ERROR("Error occurs in segment fetching: " << errorMsg);
-      });
+  ndn::SegmentFetcher::Options ckOptions;
+  ckOptions.probeLatestVersion = false; // Disable MustBeFresh flag
+  auto ckFetcher = SegmentFetcher::start(m_face, ckInterest, m_validator, ckOptions);
+  ckFetcher->afterSegmentValidated.connect([](Data seg) {
+    NDN_LOG_DEBUG("Validated CK seg " << seg.getName());
+  });
+  ckFetcher->onComplete.connect([=](ConstBufferPtr contentBuffer) {
+    Name ckObjName = ckKey; // normalized object base name
+    Block ckBlock(contentBuffer);
+    // Cache encrypted AES (best-effort)
+    try {
+      ckBlock.parse();
+      Block encTLV = ckBlock.get(TLV_EncryptedAesKey);
+      m_ckEncAesCache[ckObjName] = Buffer(encTLV.value(), encTLV.value_size());
     }
-    // if no segmentation
-    else {
-      m_validator.validate(data,
-        [=] (const Data& data) {
-          NDN_LOG_INFO("Content key conforms to trust schema");
-          onCkeyData(data.getName(), data.getContent(), cipherText, successCallBack, errorCallback);
-        },
-        [] (auto&&, const ndn::security::ValidationError& error) {
-          NDN_THROW(std::runtime_error("Fetched content key cannot be authenticated: " + error.getInfo()));
-        }
-      );
+    catch (const std::exception& e) {
+      NDN_LOG_WARN("CK cache fill skipped: " << e.what());
     }
-  };
-
-  // probe segmentation
-  NDN_LOG_INFO(m_cert.getIdentity() << " Ask for data " << ckInterest.getName());
-  m_face.expressInterest(ckInterest,
-                         dataCallback,
-                         std::bind(&Consumer::handleNack, this, _1, _2, errorCallback, nackMessage),
-                         std::bind(&Consumer::handleTimeout, this, _1, m_maxRetries,
-                                   dataCallback, errorCallback, nackMessage, timeoutMessage));
+    // Fan-out to all waiters for this CK
+    auto it = m_pendingCallbacks.find(ckKey);
+    if (it != m_pendingCallbacks.end()) {
+      for (const auto& t : it->second) {
+        onCkeyData(ckObjName, ckBlock, t.cipher, t.onSuccess, t.onError);
+      }
+      m_pendingCallbacks.erase(it);
+    }
+    m_ckInterestsSent.erase(ckKey);
+  });
+  ckFetcher->onError.connect([=](uint32_t errorCode, const std::string& errorMsg) {
+    NDN_LOG_ERROR("CK fetch error: " << errorMsg);
+    // Broadcast error to all waiters
+    auto it = m_pendingCallbacks.find(ckKey);
+    if (it != m_pendingCallbacks.end()) {
+      for (const auto& t : it->second) {
+        if (t.onError) t.onError(errorMsg);
+      }
+      m_pendingCallbacks.erase(it);
+    }
+    m_ckInterestsSent.erase(ckKey);
+  });
 }
 
 void
@@ -263,25 +278,25 @@ Consumer::onCkeyData(const Name& ckObjName, const Block& content,
   cipherText->m_contentKey = std::make_shared<algo::ContentKey>();
   cipherText->m_contentKey->m_encAesKey = Buffer(encryptedAESKeyTLV.value(), encryptedAESKeyTLV.value_size());
 
-  NDN_LOG_INFO("Content size : " << cipherText->m_content.size());
-  NDN_LOG_INFO("Plaintext size : " << cipherText->m_plainTextSize);
-  NDN_LOG_INFO("Encrypted aes key size : " << cipherText->m_contentKey->m_encAesKey.size());
-
-  Buffer result;
+  NDN_LOG_DEBUG("Content size : " << cipherText->m_content.size());
+  NDN_LOG_DEBUG("Plaintext size : " << cipherText->m_plainTextSize);
+  NDN_LOG_DEBUG("Encrypted aes key size : " << cipherText->m_contentKey->m_encAesKey.size());
   try {
+    Buffer result;
     if (m_paramFetcher.getAbeType() == ABE_TYPE_CP_ABE)
       result = algo::ABESupport::getInstance().cpDecrypt(m_paramFetcher.getPublicParams(), m_keyCache, *cipherText);
     else if (m_paramFetcher.getAbeType() == ABE_TYPE_KP_ABE)
       result = algo::ABESupport::getInstance().kpDecrypt(m_paramFetcher.getPublicParams(), m_keyCache, *cipherText);
-    else
+    else {
       errorCallback("Unsupported ABE type");
+      return;
+    }
+    NDN_LOG_INFO("Result length : " << result.size());
+    successCallBack(result);
   }
   catch (const std::exception& e) {
     errorCallback(e.what());
-    return;
   }
-  NDN_LOG_INFO("Result length : " << result.size());
-  successCallBack(result);
 }
 
 void

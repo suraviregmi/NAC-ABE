@@ -150,6 +150,16 @@ private:
   TrustConfig m_trustConfig;
   algo::PrivateKey m_keyCache;
 
+  struct PendingTask {
+    std::shared_ptr<algo::CipherText> cipher;
+    ConsumptionCallback onSuccess;
+    ErrorCallback onError;
+  };
+
+  std::unordered_set<ndn::Name> m_ckInterestsSent;
+  std::unordered_map<ndn::Name, std::vector<PendingTask>> m_pendingCallbacks;
+  std::unordered_map<ndn::Name, ndn::Buffer> m_ckEncAesCache;
+
   int m_maxRetries = 3;
   int m_defaultTimeout = 200;
 
