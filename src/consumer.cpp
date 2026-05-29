@@ -132,8 +132,6 @@ Consumer::consume(const Interest& dataInterest,
   });
   fetcher->onComplete.connect([=](ConstBufferPtr contentBuffer) {
     Name baseName = dataInterest.getName();
-    if (baseName.size() > 0 && baseName.get(-1).isSegment())
-      baseName = baseName.getPrefix(-1);
 
     NDN_LOG_DEBUG("SegmentFetcher completed with total fetched size of " << contentBuffer->size() << " baseName=" << baseName);
     decryptContent(baseName, Block(contentBuffer), consumptionCb, errorCallback);
@@ -169,14 +167,6 @@ Consumer::setDefaultTimeout(int defaultTimeout)
   m_defaultTimeout = defaultTimeout;
 }
 
-static inline Name
-normalizeCkKey(const Name& ckName)
-{
-  if (ckName.size() > 0 && ckName.get(-1).isSegment())
-    return ckName.getPrefix(-1);
-  return ckName;
-}
-
 void
 Consumer::decryptContent(const Name& dataObjName,
                          const Block& content,
@@ -192,9 +182,8 @@ Consumer::decryptContent(const Name& dataObjName,
   cipherText->m_content = Buffer(encryptedContentTLV.value(), encryptedContentTLV.value_size());
   cipherText->m_plainTextSize = readNonNegativeInteger(content.get(TLV_PlainTextSize));
 
-  Name ckName(content.get(tlv::Name));
-  Name ckKey = normalizeCkKey(ckName);
-  NDN_LOG_INFO("CK Name is " << ckName);
+  Name ckKey(content.get(tlv::Name));
+  NDN_LOG_INFO("CK Name is " << ckKey);
 
   // 1) Cache fast-path
   auto cacheIt = m_ckEncAesCache.find(ckKey);
@@ -289,9 +278,9 @@ Consumer::onCkeyData(const Name& ckObjName, const Block& content,
   cipherText->m_contentKey = std::make_shared<algo::ContentKey>();
   cipherText->m_contentKey->m_encAesKey = Buffer(encryptedAESKeyTLV.value(), encryptedAESKeyTLV.value_size());
 
-  NDN_LOG_INFO("Content size : " << cipherText->m_content.size());
-  NDN_LOG_INFO("Plaintext size : " << cipherText->m_plainTextSize);
-  NDN_LOG_INFO("Encrypted aes key size : " << cipherText->m_contentKey->m_encAesKey.size());
+  NDN_LOG_DEBUG("Content size : " << cipherText->m_content.size());
+  NDN_LOG_DEBUG("Plaintext size : " << cipherText->m_plainTextSize);
+  NDN_LOG_DEBUG("Encrypted aes key size : " << cipherText->m_contentKey->m_encAesKey.size());
   try {
     Buffer result;
     if (m_paramFetcher.getAbeType() == ABE_TYPE_CP_ABE)
