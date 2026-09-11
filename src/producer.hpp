@@ -82,7 +82,7 @@ public:
           span<const uint8_t> content, const security::SigningInfo& info,
           std::shared_ptr<Data> ckTemplate = getDefaultCkTemplate(), 
           shared_ptr<Data> dataTemplate = getDefaultEncryptedDataTemplate(),
-          size_t maxSegmentSize = 1500);
+          size_t maxSegmentSize = 7500);
 
   /**
    * @brief Produce CP-encrypted CK Data
@@ -95,7 +95,7 @@ public:
   std::pair<std::shared_ptr<algo::ContentKey>, SPtrVector<Data>>
   ckDataGen(const Policy& accessPolicy, const security::SigningInfo& info,
             std::shared_ptr<Data> dataTemplate = getDefaultCkTemplate(),
-            size_t maxSegmentSize = 1500);
+            size_t maxSegmentSize = 7500);
 
   /**
    * @brief Produce KP-encrypted Data and corresponding encrypted CK Data
@@ -113,7 +113,7 @@ public:
           span<const uint8_t> content, const security::SigningInfo& info,
           std::shared_ptr<Data> ckTemplate = getDefaultCkTemplate(),
           shared_ptr<Data> dataTemplate = getDefaultEncryptedDataTemplate(),
-          size_t maxSegmentSize = 1500);
+          size_t maxSegmentSize = 7500);
 
   /**
    * @brief Asynchronous version of the KP-ABE produce() overload above.
@@ -132,7 +132,7 @@ public:
                ProduceSuccessCallback onSuccess, ProduceErrorCallback onError,
                std::shared_ptr<Data> ckTemplate = getDefaultCkTemplate(),
                shared_ptr<Data> dataTemplate = getDefaultEncryptedDataTemplate(),
-               size_t maxSegmentSize = 1500);
+               size_t maxSegmentSize = 7500);
 
   /**
    * @brief Asynchronous version of the CP-ABE produce() overload above.
@@ -144,7 +144,7 @@ public:
                ProduceSuccessCallback onSuccess, ProduceErrorCallback onError,
                std::shared_ptr<Data> ckTemplate = getDefaultCkTemplate(),
                shared_ptr<Data> dataTemplate = getDefaultEncryptedDataTemplate(),
-               size_t maxSegmentSize = 1500);
+               size_t maxSegmentSize = 7500);
 
   /**
    * @brief Produce KP-encrypted CK Data
@@ -157,7 +157,7 @@ public:
   std::pair<std::shared_ptr<algo::ContentKey>, SPtrVector<Data>>
   ckDataGen(const std::vector<std::string>& attributes, const security::SigningInfo& info,
             std::shared_ptr<Data> dataTemplate = getDefaultCkTemplate(),
-            size_t maxSegmentSize = 1500);
+            size_t maxSegmentSize = 7500);
 
   /**
    * @brief Produce encrypted Data and corresponding encrypted CK Data
@@ -174,7 +174,7 @@ public:
           span<const uint8_t> content, const security::SigningInfo& info,
           std::shared_ptr<Data> ckTemplate = getDefaultCkTemplate(),
           shared_ptr<Data> dataTemplate = getDefaultEncryptedDataTemplate(),
-          size_t maxSegmentSize = 1500);
+          size_t maxSegmentSize = 7500);
 
   /**
    * @brief Produce encrypted Data and from CK Data
@@ -191,7 +191,7 @@ public:
           const Name& keyName, const Name& dataNameSuffix,
           span<const uint8_t> content, const security::SigningInfo& info,
           shared_ptr<Data> dataTemplate = getDefaultEncryptedDataTemplate(),
-          size_t maxSegmentSize = 1500);
+          size_t maxSegmentSize = 7500);
 
 private:
   void
@@ -207,7 +207,7 @@ private:
   getCkEncryptedData(const Name& dataNameSuffix, const algo::CipherText& cipherText,
                      const Name& ckName, const security::SigningInfo& info,
                      shared_ptr<Data> dataTemplate = getDefaultEncryptedDataTemplate(),
-                     size_t maxSegmentSize = 1500);
+                     size_t maxSegmentSize = 7500);
 
 PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   std::string
