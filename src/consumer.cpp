@@ -70,8 +70,13 @@ Consumer::obtainDecryptionKey()
   Interest interest(interestName);
   interest.setMustBeFresh(true);
   interest.setCanBePrefix(true);
+  ndn::SegmentFetcher::Options fetchOptions;
 
-  auto fetcher = SegmentFetcher::start(m_face, interest, m_validator);
+  fetchOptions.interestLifetime = ndn::time::seconds(4);
+  fetchOptions.maxTimeout = ndn::time::seconds(120);
+  auto fetcher = SegmentFetcher::start(m_face, interest, m_validator, fetchOptions);
+
+  // auto fetcher = SegmentFetcher::start(m_face, interest, m_validator);
   fetcher->afterSegmentValidated.connect([](Data seg) {
     NDN_LOG_DEBUG("Validated " << seg.getName());
   });
