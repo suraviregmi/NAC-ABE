@@ -20,12 +20,15 @@
 
 #include "abe-support.hpp"
 #include "../ndn-crypto/error.hpp"
+#include <ndn-cxx/util/logger.hpp>
 
 using namespace oabe;
 using namespace oabe::crypto;
 
 namespace ndn {
 namespace nacabe {
+  NDN_LOG_INIT(nacabe.ABESupport);
+
 namespace algo {
 
 const char* ABESupport::SCHEMA_CPABE = "CP-ABE";
@@ -181,6 +184,9 @@ ABESupport::contentKeyGen(oabe::OpenABECryptoContext &context, const PublicParam
               const std::string &policyOrAttribute)
 {
   try {
+    size_t numAttrs = std::count(policyOrAttribute.begin(), policyOrAttribute.end(), '|') + 1;
+    NDN_LOG_DEBUG("op_Producer_ck_gen_start attrs=" << numAttrs);
+
     // step 0: set up ABE Context
     context.importPublicParams(pubParams.m_pub);
 
@@ -188,10 +194,13 @@ ABESupport::contentKeyGen(oabe::OpenABECryptoContext &context, const PublicParam
     OpenABESymKey symKey;
     symKey.generateSymmetricKey(DEFAULT_SYM_KEY_BYTES);
     std::string symmetricKey = symKey.toString();
+    NDN_LOG_DEBUG("op_Producer_ck_gen_end attrs=" << numAttrs);
 
     // step 2: use publicParams and policy to cpEncrypt this symmetric key
     std::string encryptedSymmetricKey;
+    NDN_LOG_DEBUG("op_Producer_ck_encrypt_start");
     context.encrypt(policyOrAttribute, symmetricKey, encryptedSymmetricKey);
+    NDN_LOG_DEBUG("op_Producer_ck_encrypt_end");
 
     Buffer encAesKeySegment((uint8_t*) encryptedSymmetricKey.c_str(),
                             (uint32_t) encryptedSymmetricKey.size() + 1);
@@ -210,9 +219,11 @@ ABESupport::encrypt(std::shared_ptr<ContentKey> contentKey, Buffer plaintext) {
   try {
     // step 3: use the AES symmetric key to cpEncrypt the plain text
     OpenABESymKeyEnc aes(contentKey->m_aesKey);
+    NDN_LOG_DEBUG("op_Producer_data_encrypt_start");
     std::string ciphertext = aes.encrypt(
         (uint8_t*) plaintext.data(),
         (uint32_t) plaintext.size());
+    NDN_LOG_DEBUG("op_Producer_data_encrypt_end");
 
 
     // step 4: put encryptedSymmetricKey and ciphertext in CipherText object
@@ -256,7 +267,11 @@ ABESupport::decrypt(oabe::OpenABECryptoContext& context, const PublicParams &pub
 
         // step 2: cpDecrypt cipherText.aesKey, which is the encrypted symmetric key
         // not found in cache, decrypt it and cache it
+        NDN_LOG_DEBUG("op_Consumer_ck_decrypt_start");
+
         bool result = context.decrypt(encryptedSymmetricKey, cipherText.m_contentKey->m_aesKey);
+        NDN_LOG_DEBUG("op_Consumer_ck_decrypt_end");
+
         if (!result)
         {
           BOOST_THROW_EXCEPTION(NacAlgoError("Decryption error!"));
@@ -269,7 +284,10 @@ ABESupport::decrypt(oabe::OpenABECryptoContext& context, const PublicParams &pub
     // step 3: use the decrypted symmetricKey to AES cpDecrypt cipherText.m_content
     OpenABESymKeyEnc aes(decryptedSymmetricKey);
     std::string cipherContentStr(reinterpret_cast<char*>(cipherText.m_content.data()));
+    NDN_LOG_DEBUG("op_Consumer_data_decrypt_start");
+
     std::string recoveredContent = aes.decrypt(cipherContentStr);
+    NDN_LOG_DEBUG("op_Consumer_data_decrypt_end");
 
     // step 4: set up a Buffer for the decrypted content, and return the Buffer
     Buffer ret((uint8_t*) recoveredContent.c_str(),
