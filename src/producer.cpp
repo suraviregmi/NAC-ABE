@@ -21,12 +21,15 @@
 #include "producer.hpp"
 #include "attribute-authority.hpp"
 #include "algo/abe-support.hpp"
+#include "crypto-executor.hpp"
 
 #include <ndn-cxx/encoding/block-helpers.hpp>
 #include <ndn-cxx/security/signing-helpers.hpp>
 #include <utility>
 #include <ndn-cxx/security/verification-helpers.hpp>
 #include <ndn-cxx/util/random.hpp>
+
+#include <boost/asio/post.hpp>
 
 namespace ndn {
 namespace nacabe {
@@ -94,6 +97,42 @@ Producer::produce(const Name& dataNameSuffix, const std::string& accessPolicy,
   }
 }
 
+void
+Producer::produceAsync(const Name& dataNameSuffix, const Policy& accessPolicy,
+                       span<const uint8_t> content, const security::SigningInfo& info,
+                       ProduceSuccessCallback onSuccess, ProduceErrorCallback onError,
+                       std::shared_ptr<Data> ckTemplate, shared_ptr<Data> dataTemplate,
+                       size_t maxSegmentSize)
+{
+  auto contentCopy = std::make_shared<Buffer>(content.begin(), content.end());
+
+  boost::asio::post(CryptoExecutor::getInstance().ioContext(),
+    [this, dataNameSuffix, accessPolicy, contentCopy, info,
+     onSuccess = std::move(onSuccess), onError = std::move(onError),
+     ckTemplate, dataTemplate, maxSegmentSize]() mutable {
+      SPtrVector<Data> enc, ck;
+      std::string error;
+      try {
+        std::tie(enc, ck) = produce(dataNameSuffix, accessPolicy,
+            span<const uint8_t>(contentCopy->data(), contentCopy->size()),
+            info, ckTemplate, dataTemplate, maxSegmentSize);
+      }
+      catch (const std::exception& e) {
+        error = e.what();
+      }
+
+      boost::asio::post(m_face.getIoContext(),
+        [onSuccess = std::move(onSuccess), onError = std::move(onError),
+         enc = std::move(enc), ck = std::move(ck), error = std::move(error)]() mutable {
+          if (!error.empty()) {
+            if (onError) onError(error);
+            return;
+          }
+          if (onSuccess) onSuccess(std::move(enc), std::move(ck));
+        });
+    });
+}
+
 std::pair<std::shared_ptr<algo::ContentKey>, SPtrVector<Data>>
 Producer::ckDataGen(const Policy& accessPolicy,
                     const security::SigningInfo& info,
@@ -145,6 +184,49 @@ Producer::produce(const Name& dataNameSuffix, const std::vector<std::string>& at
   }
 }
 
+void
+Producer::produceAsync(const Name& dataNameSuffix, const std::vector<std::string>& attributes,
+                       span<const uint8_t> content, const security::SigningInfo& info,
+                       ProduceSuccessCallback onSuccess, ProduceErrorCallback onError,
+                       std::shared_ptr<Data> ckTemplate, shared_ptr<Data> dataTemplate,
+                       size_t maxSegmentSize)
+{
+  // content may point into a buffer the caller doesn't keep alive past this
+  // call, so copy it before crossing the thread boundary.
+  auto contentCopy = std::make_shared<Buffer>(content.begin(), content.end());
+
+  boost::asio::post(CryptoExecutor::getInstance().ioContext(),
+    [this, dataNameSuffix, attributes, contentCopy, info,
+     onSuccess = std::move(onSuccess), onError = std::move(onError),
+     ckTemplate, dataTemplate, maxSegmentSize]() mutable {
+      // ---- CRYPTO THREAD: pairing + AES + sign, no Face access ----
+      SPtrVector<Data> enc, ck;
+      std::string error;
+      try {
+        // Virtual dispatch: CacheProducer::produce() reuses a cached content
+        // key when this attribute set repeats, so the pairing operation only
+        // actually runs the first time a given attribute set is seen.
+        std::tie(enc, ck) = produce(dataNameSuffix, attributes,
+            span<const uint8_t>(contentCopy->data(), contentCopy->size()),
+            info, ckTemplate, dataTemplate, maxSegmentSize);
+      }
+      catch (const std::exception& e) {
+        error = e.what();
+      }
+
+      // ---- back to this Producer's own Face thread ----
+      boost::asio::post(m_face.getIoContext(),
+        [onSuccess = std::move(onSuccess), onError = std::move(onError),
+         enc = std::move(enc), ck = std::move(ck), error = std::move(error)]() mutable {
+          if (!error.empty()) {
+            if (onError) onError(error);
+            return;
+          }
+          if (onSuccess) onSuccess(std::move(enc), std::move(ck));
+        });
+    });
+}
+
 std::pair<std::shared_ptr<algo::ContentKey>, SPtrVector<Data>>
 Producer::ckDataGen(const std::vector<std::string>& attributes,
                     const security::SigningInfo& info,
@@ -164,7 +246,7 @@ Producer::ckDataGen(const std::vector<std::string>& attributes,
     std::string s("|");
     for (const auto& a : attributes)
       s += a + '|';
-    NDN_LOG_INFO("Generate CK data: " << s);
+    NDN_LOG_DEBUG("Generate CK data: " << s);
     auto contentKey = algo::ABESupport::getInstance().kpContentKeyGen(m_paramFetcher.getPublicParams(), attributes);
 
     name::Component nc;
@@ -222,7 +304,7 @@ Producer::produce(std::shared_ptr<algo::ContentKey> key,
                   shared_ptr<Data> dataTemplate,
                   size_t maxSegmentSize)
 {
-  NDN_LOG_INFO("Encrypt on data:" << dataNameSuffix);
+  // NDN_LOG_DEBUG("Encrypt on data:" << dataNameSuffix);
   auto cipherText = algo::ABESupport::getInstance().encrypt(std::move(key), Buffer(content.begin(), content.end()));
   return getCkEncryptedData(dataNameSuffix, cipherText, keyName, info, std::move(dataTemplate), maxSegmentSize);
 }

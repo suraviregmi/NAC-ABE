@@ -40,7 +40,7 @@ public:
 
   void
   fetchPublicParams();
-
+ void retryLater();
   AbeType
   getAbeType() const
   {

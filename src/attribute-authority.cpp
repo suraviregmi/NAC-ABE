@@ -127,7 +127,11 @@ SPtrVector<Data>
 AttributeAuthority::generateDecryptionKeySegments(const Name& objName, const security::Certificate& cert)
 {
   // prepare segments
+    auto t0 = ndn::time::steady_clock::now();
   auto ABEPrvKey = getPrivateKey(cert.getIdentity());
+  NDN_LOG_INFO("DKEY keygen for " << cert.getIdentity() << " took "
+               << ndn::time::duration_cast<ndn::time::milliseconds>(ndn::time::steady_clock::now() - t0).count() << " ms");
+
   auto prvBuffer = ABEPrvKey.toBuffer();
   Block dkBlock = encryptDataContentWithCK(prvBuffer, cert.getPublicKey());
   span<const uint8_t> dkSpan = make_span(dkBlock.data(), dkBlock.size());
@@ -152,6 +156,7 @@ AttributeAuthority::onPublicParamsRequest(const Interest& interest)
   const auto& contentBuf = m_pubParams.toBuffer();
   result.setContent(contentBuf);
   m_keyChain.sign(result, signingByCertificate(m_cert));
+  NDN_LOG_INFO("sending pubparam: " << interest.getName() << "signed by" << Name(m_cert.getIdentity()));
 
   NDN_LOG_TRACE("Reply public params request.");
   NDN_LOG_TRACE("Pub params size: " << contentBuf.size());
@@ -212,6 +217,9 @@ KpAttributeAuthority::KpAttributeAuthority(const security::Certificate& identity
   : AttributeAuthority(identityCert, face, validator, keyChain, ABE_TYPE_KP_ABE, maxSegmentSize)
 {
   // decryption key filter
+
+  NDN_LOG_INFO("Setting INterest filter for dkey: " << Name(m_cert.getIdentity()).append(DECRYPT_KEY));
+
   m_face.setInterestFilter(Name(m_cert.getIdentity()).append(DECRYPT_KEY),
                            std::bind(&KpAttributeAuthority::onDecryptionKeyRequest, this, _2));
 }

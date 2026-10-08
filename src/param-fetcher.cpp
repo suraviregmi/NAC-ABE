@@ -61,8 +61,9 @@ ParamFetcher::fetchPublicParams()
       m_retryCount = 0;
       onAttributePubParams(data);
     },
-    [this](const Interest&, const lp::Nack&) {
+    [this](const Interest&, const lp::Nack& nack) {
       NDN_LOG_WARN("Received NACK, retrying...");
+        NDN_LOG_WARN("Received NACK reason=" << nack.getReason() << ", retrying...");
       fetchPublicParams(); // Retry
     },
     [this](const Interest&) {
