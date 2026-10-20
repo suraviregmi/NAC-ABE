@@ -246,7 +246,7 @@ Producer::ckDataGen(const std::vector<std::string>& attributes,
     std::string s("|");
     for (const auto& a : attributes)
       s += a + '|';
-    NDN_LOG_DEBUG("Generate CK data: " << s);
+    NDN_LOG_INFO("Generate CK data: " << s);
     auto contentKey = algo::ABESupport::getInstance().kpContentKeyGen(m_paramFetcher.getPublicParams(), attributes);
 
     name::Component nc;
@@ -304,7 +304,7 @@ Producer::produce(std::shared_ptr<algo::ContentKey> key,
                   shared_ptr<Data> dataTemplate,
                   size_t maxSegmentSize)
 {
-  // NDN_LOG_DEBUG("Encrypt on data:" << dataNameSuffix);
+  NDN_LOG_INFO("Encrypt on data:" << dataNameSuffix);
   auto cipherText = algo::ABESupport::getInstance().encrypt(std::move(key), Buffer(content.begin(), content.end()));
   return getCkEncryptedData(dataNameSuffix, cipherText, keyName, info, std::move(dataTemplate), maxSegmentSize);
 }
