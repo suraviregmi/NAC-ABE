@@ -255,19 +255,12 @@ You can also use CacheProducer, which will automatically cache and reuse all the
 
 #### Produce data asynchronously
 
-ABE encryption is expensive and blocks the Face's event loop when called synchronously.
-`produceAsync()` runs the encryption on a shared background crypto thread (`CryptoExecutor`)
-and invokes the callback back on the producer's Face thread:
-
 ```c++
-// for KP-ABE (CP-ABE takes a policy string instead of the attribute list)
-producer.produceAsync(dataName, {"ucla", "cs", "exam"}, PLAIN_TEXT, signingInfo,
-  [] (SPtrVector<Data> contentData, SPtrVector<Data> ckData) { /* publish */ },
-  [] (const std::string& error) { /* handle error */ });
+producer.produceAsync(dataName, {"ucla", "cs", "exam"}, PLAIN_TEXT, signingInfo, onSuccess, onError);
 ```
 
-The Producer must outlive any in-flight `produceAsync()` call.
-See [docs/crypto-executor.md](docs/crypto-executor.md) for details.
+Same as `produce()`, but the ABE encryption runs on a background thread (`CryptoExecutor`) so it doesn't block the Face.
+Callbacks run on the producer's Face thread.
 
 ### 3.4 Decryptor (Data Consumer)
 
@@ -295,8 +288,7 @@ consumer.consume(dataName, successCallback, failCallback);
 
 This function will fetch the content Data packet by the name, fetch the corresponding encrypted CK Data packet.
 Then it uses its decryption key (DKEY) to cpDecrypt the CK, then use the CK to cpDecrypt the content Data packet.
-Decryption runs on the shared background crypto thread (`CryptoExecutor`), and the callbacks are invoked
-on the consumer's Face thread, so the Consumer must outlive any in-flight `consume()` call.
+Decryption runs on the `CryptoExecutor` background thread; callbacks run on the consumer's Face thread.
 
 ## 4 Issue Report
 
