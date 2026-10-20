@@ -83,9 +83,6 @@ queued job captures `this`.
 
 ## Related changes in this branch
 
-- Default `maxSegmentSize` for `Producer` produce/CK-generation APIs raised
-  from 1500 to 7500 bytes, reducing the number of segments for large CK and
-  encrypted-data objects.
 - `Consumer::obtainDecryptionKey()` now uses a 4 s Interest lifetime and a
   120 s max timeout for the DKEY `SegmentFetcher`, since DKEY generation at
   the attribute authority can be slow.
