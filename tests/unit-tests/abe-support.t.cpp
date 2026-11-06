@@ -22,6 +22,8 @@
 
 #include "test-common.hpp"
 
+#include <thread>
+
 namespace ndn {
 namespace nacabe {
 namespace algo {
@@ -131,6 +133,27 @@ BOOST_AUTO_TEST_CASE(CpEncryptionDecryption)
   // cannot decrypt because of the wrong encryption attribute policy
   BOOST_CHECK_THROW(ABESupport::getInstance().cpDecrypt(pubParams, prvKey, cipherText6),
                     std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(CpEncryptionDecryptionOnOtherThreads)
+{
+  PublicParams pubParams;
+  MasterKey masterKey;
+  ABESupport::getInstance().cpInit(pubParams, masterKey);
+  std::vector<std::string> attrList = { "ucla", "professor" };
+  auto prvKey = ABESupport::getInstance().cpPrvKeyGen(pubParams, masterKey, attrList);
+
+  // Each thread needs its own RELIC context, including a second thread after the first has exited.
+  for (int i = 0; i < 2; ++i) {
+    Buffer result;
+    std::thread worker([&] {
+      auto cipherText = ABESupport::getInstance().cpEncrypt(pubParams, "ucla and professor",
+                                                            Buffer(PLAIN_TEXT, sizeof(PLAIN_TEXT)));
+      result = ABESupport::getInstance().cpDecrypt(pubParams, prvKey, cipherText);
+    });
+    worker.join();
+    BOOST_CHECK_EQUAL_COLLECTIONS(result.begin(), result.end(), PLAIN_TEXT, PLAIN_TEXT + sizeof(PLAIN_TEXT));
+  }
 }
 
 BOOST_AUTO_TEST_CASE(KpEncryptionDecryption)

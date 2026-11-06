@@ -19,6 +19,7 @@
  */
 
 #include "crypto-executor.hpp"
+#include "algo/abe-support.hpp"
 
 namespace ndn {
 namespace nacabe {
@@ -34,6 +35,9 @@ CryptoExecutor::CryptoExecutor()
   : m_work(boost::asio::make_work_guard(m_io))
   , m_thread([this] { m_io.run(); })
 {
+  // Finish constructing ABESupport first so that it is destroyed after this
+  // executor, which joins the crypto thread before OpenABE is shut down.
+  algo::ABESupport::getInstance();
 }
 
 CryptoExecutor::~CryptoExecutor()

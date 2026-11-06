@@ -31,21 +31,57 @@ namespace algo {
 const char* ABESupport::SCHEMA_CPABE = "CP-ABE";
 const char* ABESupport::SCHEMA_KPABE = "KP-ABE";
 
+namespace {
+
+// RELIC keeps its state per thread, and InitializeOpenABE() only sets it up for
+// the calling thread, so every other thread using OpenABE needs its own context.
+thread_local bool t_hasContext = false;
+
+class ThreadContext
+{
+public:
+  ThreadContext()
+  {
+    if (!t_hasContext) {
+      zMathInitLibrary();
+      t_hasContext = true;
+    }
+  }
+
+  ~ThreadContext()
+  {
+    if (t_hasContext) {
+      zMathShutdownLibrary();
+      t_hasContext = false;
+    }
+  }
+};
+
+} // namespace
+
 ABESupport&
 ABESupport::getInstance()
 {
   static ABESupport instance;
+  thread_local ThreadContext threadContext;
   return instance;
 }
 
 ABESupport::ABESupport()
 {
   InitializeOpenABE();
+  t_hasContext = true;
 }
 
 ABESupport::~ABESupport()
 {
+  // Static destruction may run on a thread with no context, either because it
+  // never used OpenABE or because its ThreadContext was already destroyed.
+  if (!t_hasContext) {
+    zMathInitLibrary();
+  }
   ShutdownOpenABE();
+  t_hasContext = false;
 }
 
 void
